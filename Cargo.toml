@@ -1,0 +1,11 @@
+[package]
+name = "tose_converter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tempfile = "3.10.1"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
