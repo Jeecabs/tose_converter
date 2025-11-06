@@ -1,21 +1,67 @@
 # TOSE Converter
 
-A high-performance Rust CLI tool that converts CSV data to **TOSE (Token-Optimized SQL Exchange)** format - a compact, human-readable serialization format designed to pipe structured SQL query results to Large Language Models with significantly reduced token usage compared to JSON.
+A Rust CLI tool that adds a schema header to CSV data from PostgreSQL. TOSE (Token-Optimized SQL Exchange) is essentially **CSV with a descriptive header line** that tells an LLM what the data represents.
 
-## Features
+## What It Does
 
-- **Token Efficient**: Achieves CSV-like compactness while maintaining structural explicitness
-- **High Performance**: Streaming architecture handles gigabytes of data with minimal memory footprint
-- **RFC 4180 Compliant**: Preserves all CSV escaping (quotes, commas, newlines, NULL values)
-- **Simple Pipeline Design**: Acts as a Unix-style filter (stdin → stdout)
-- **Zero Configuration**: No config files, just command-line arguments
+Converts this:
+```csv
+1,Alice,alice@example.com
+2,Bob,bob@example.com
+```
+
+To this:
+```
+users[2]{id,name,email}:
+1,Alice,alice@example.com
+2,Bob,bob@example.com
+```
+
+The header costs **22 tokens** but provides schema information.
+
+## When To Use This
+
+✅ **Use TOSE when:**
+- Sending multiple tables and need clear boundaries
+- LLM needs to understand column names without separate explanation
+- Debugging/exploring data where schema clarity helps
+- 22 tokens is worth it for explainability
+
+❌ **Don't use TOSE when:**
+- Sending a single table (plain CSV is 22 tokens cheaper)
+- LLM already knows the schema
+- You're at absolute token limits
+- You can explain the schema elsewhere
+
+## Scientific Benchmarks
+
+Tested with PostgreSQL on 100 rows of real data using tiktoken (GPT-4 tokenizer):
+
+| Format | Tokens | vs JSON | vs CSV |
+|--------|--------|---------|---------|
+| **JSON** | 5,820 | baseline | +76% |
+| **Plain CSV** | 3,308 | **-43%** | baseline |
+| **TOSE** | 3,330 | **-43%** | +22 tokens |
+
+**Bottom line:** TOSE and CSV save ~43% vs JSON. TOSE costs 22 extra tokens for the header.
+
+### Multi-Table Scenario
+
+With 3 tables (users, orders, products):
+
+| Format | Tokens | Notes |
+|--------|--------|-------|
+| **Plain CSV** | 760 | Tables mashed together, no way to tell them apart |
+| **TOSE** | 818 | Clear table boundaries, +58 tokens |
+
+TOSE makes more sense here, but honestly you should probably JOIN the tables properly instead.
 
 ## Installation
 
 ### Homebrew (macOS)
 
 ```bash
-brew tap lachlanjacobs/tose
+brew tap jeecabs/tose
 brew install tose_converter
 ```
 
@@ -24,7 +70,7 @@ brew install tose_converter
 Requires [Rust](https://rustup.rs/) 1.88.0 or later:
 
 ```bash
-git clone https://github.com/lachlanjacobs/tose_converter.git
+git clone https://github.com/Jeecabs/tose_converter.git
 cd tose_converter
 cargo install --path .
 ```
@@ -64,63 +110,44 @@ psql -d my_db -c "\copy (SELECT id, title, body FROM notes) TO STDOUT WITH (FORM
 | tose_converter notes id title body
 ```
 
-**Pipe to LLM API:**
-```bash
-psql -d my_db -c "\copy (SELECT * FROM users LIMIT 100) TO STDOUT WITH (FORMAT CSV, HEADER FALSE)" \
-| tose_converter users id username email last_login is_active \
-| curl -X POST https://api.anthropic.com/v1/messages \
-  -H "Content-Type: application/json" \
-  -d @-
-```
-
 ## TOSE Format
 
-TOSE documents consist of two parts:
+Two parts:
 
-1. **Schema Header** (one line): `ENTITY[COUNT]{FIELD1,FIELD2,...}:`
-2. **Data Block**: RFC 4180 CSV data
+1. **Schema Header**: `ENTITY[COUNT]{FIELD1,FIELD2,...}:`
+2. **Data Block**: Standard RFC 4180 CSV
 
-### Example
+### Comparison
 
-**Input CSV:**
+**Plain CSV (no schema info):**
 ```csv
 1,Alice,alice@example.com
 2,Bob,bob@example.com
 ```
+*LLM doesn't know what columns are*
 
-**TOSE Output:**
+**TOSE (22 tokens for schema):**
 ```
 users[2]{id,name,email}:
 1,Alice,alice@example.com
 2,Bob,bob@example.com
 ```
+*LLM knows: entity name, row count, column names*
 
-### Token Savings
+## Honest Assessment
 
-Compared to JSON, TOSE reduces tokens by **60-80%** for tabular data:
+This tool works fine for what it does, but:
 
-**JSON (178 tokens):**
-```json
-[
-  {"id": 1, "name": "Alice", "email": "alice@example.com"},
-  {"id": 2, "name": "Bob", "email": "bob@example.com"}
-]
-```
+1. **Plain CSV is more token-efficient** (saves 22 tokens)
+2. **You're probably better off** explaining the schema separately if tokens matter
+3. **Most useful for multi-table exports** where you need clear boundaries
+4. **Not revolutionary** - it's literally just CSV with a header
 
-**TOSE (45 tokens):**
-```
-users[2]{id,name,email}:
-1,Alice,alice@example.com
-2,Bob,bob@example.com
-```
+Use it if the header clarity is worth 22 tokens to you. Don't use it if every token counts.
 
 ## Specification
 
-See [TOSE_SPECIFICATION.md](TOSE_SPECIFICATION.md) for the complete format specification, including:
-- Escaping rules for special characters
-- NULL value handling
-- Data type normalization guidelines
-- Design principles and rationale
+See [TOSE_SPECIFICATION.md](TOSE_SPECIFICATION.md) for complete format details.
 
 ## Development
 
@@ -136,7 +163,7 @@ cargo build --release
 cargo test
 ```
 
-The test suite includes 82 comprehensive tests covering:
+82 comprehensive tests covering:
 - TOSE specification examples
 - RFC 4180 CSV compliance
 - Row counting edge cases
@@ -151,9 +178,9 @@ cargo clippy
 
 ## Architecture
 
-- **Streaming**: Uses temporary files to buffer data while counting rows, enabling constant memory usage regardless of dataset size
-- **Zero-copy**: Preserves CSV data byte-for-byte without parsing or re-encoding
-- **Performance**: Handles gigabytes of data efficiently with buffered I/O
+- **Streaming**: Temporary file buffering for constant memory usage
+- **Zero-copy**: Preserves CSV data byte-for-byte (no parsing/re-encoding)
+- **Performance**: Handles gigabytes of data with buffered I/O
 
 ## License
 
@@ -161,15 +188,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure `cargo test` and `cargo clippy` pass
-5. Submit a pull request
+Contributions welcome! This is an educational project exploring token optimization strategies.
 
 ## Links
 
-- [GitHub Repository](https://github.com/lachlanjacobs/tose_converter)
-- [Issue Tracker](https://github.com/lachlanjacobs/tose_converter/issues)
-- [TOSE Specification](TOSE_SPECIFICATION.md)
+- [GitHub Repository](https://github.com/Jeecabs/tose_converter)
+- [Homebrew Tap](https://github.com/Jeecabs/homebrew-tose)
+- [Issue Tracker](https://github.com/Jeecabs/tose_converter/issues)
