@@ -173,11 +173,3 @@ cargo build --release
 2. **Token efficiency** - minimize LLM token consumption
 3. **Robustness** - handle all edge cases gracefully
 4. **Performance** - stream large datasets efficiently
-
-## License
-
-[Add your license here]
-
-## Contributing
-
-[Add contribution guidelines here]
