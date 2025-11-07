@@ -2,19 +2,19 @@ use tose_converter::ToseConverter;
 
 #[test]
 fn test_large_dataset_10k_rows() {
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "value".to_string()]);
+    let converter = ToseConverter::new();
 
-    // Generate 10,000 rows
-    let mut input_data = String::new();
+    // Generate a psql table with 10,000 rows
+    let mut input_data = "  id  |  value      \n------+-------------\n".to_string();
     for i in 0..10_000 {
-        input_data.push_str(&format!("{},value_{}\n", i, i));
+        input_data.push_str(&format!("   {}  | value_{}    \n", i, i));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[10000]{id,value}:"));
+    assert!(result.starts_with("result[10000]{id,value}:"));
 
     // Verify first and last rows are present
     assert!(result.contains("0,value_0\n"));
@@ -23,93 +23,120 @@ fn test_large_dataset_10k_rows() {
 
 #[test]
 fn test_very_large_dataset_100k_rows() {
-    let converter = ToseConverter::new("big".to_string(), vec!["n".to_string()]);
+    let converter = ToseConverter::new();
 
-    // Generate 100,000 rows
-    let mut input_data = String::new();
+    // Generate a psql table with 100,000 rows
+    let mut input_data = "  n  \n-----\n".to_string();
     for i in 0..100_000 {
-        input_data.push_str(&format!("{}\n", i));
+        input_data.push_str(&format!("  {}  \n", i));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("big[100000]{n}:"));
+    assert!(result.starts_with("result[100000]{n}:"));
 }
 
 #[test]
-fn test_long_lines() {
-    // Test handling of very long individual lines
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "data".to_string()]);
+fn test_long_values() {
+    // Test handling of very long individual values
+    let converter = ToseConverter::new();
 
     let long_value = "x".repeat(50_000);
-    let input = format!("1,\"{}\"\n2,short\n", long_value);
+    let input = format!("  id  |  data       \n------+-------------\n   1  | {}  \n   2  | short       \n", long_value);
 
     let mut output = Vec::new();
     converter.convert(input.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[2]{id,data}:"));
+    assert!(result.starts_with("result[2]{id,data}:"));
     assert!(result.contains(&long_value));
     assert!(result.contains("2,short"));
 }
 
 #[test]
 fn test_many_columns() {
-    // Test handling of rows with many columns
-    let mut fields = Vec::new();
-    let mut values = Vec::new();
+    // Test handling of rows with many columns (100 columns)
+    let converter = ToseConverter::new();
+
+    let mut header = String::new();
+    let mut separator = String::new();
+    let mut values_row = String::new();
 
     for i in 0..100 {
-        fields.push(format!("col_{}", i));
-        values.push(i.to_string());
+        if i > 0 {
+            header.push_str(" | ");
+            separator.push('+');
+            values_row.push_str(" | ");
+        }
+        header.push_str(&format!("col_{}", i));
+        separator.push_str("-------");
+        values_row.push_str(&format!("    {}  ", i));
     }
 
-    let converter = ToseConverter::new("wide".to_string(), fields.clone());
-    let input = format!("{}\n", values.join(","));
+    let input = format!("{}\n{}\n{}\n", header, separator, values_row);
 
     let mut output = Vec::new();
     converter.convert(input.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    let expected_header = format!("wide[1]{{{}}}:", fields.join(","));
-    assert!(result.starts_with(&expected_header));
+    assert!(result.starts_with("result[1]{col_0,col_1,"));
+    assert!(result.contains(",col_99}:"));
 }
 
 #[test]
-fn test_mixed_row_sizes() {
-    // Test dataset with varying row sizes
-    let converter = ToseConverter::new("test".to_string(), vec!["data".to_string()]);
+fn test_mixed_value_sizes() {
+    // Test dataset with varying value lengths
+    let converter = ToseConverter::new();
 
-    let mut input_data = String::new();
+    let mut input_data = "  id  |  data       \n------+-------------\n".to_string();
 
     // Add 1000 rows with varying lengths
     for i in 0..1000 {
         let data = "x".repeat((i % 100) + 1);
-        input_data.push_str(&format!("{}\n", data));
+        input_data.push_str(&format!("   {}  | {}  \n", i, data));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[1000]{data}:"));
+    assert!(result.starts_with("result[1000]{id,data}:"));
 }
 
 #[test]
-fn test_many_empty_lines() {
-    // Test performance with many empty lines that should be filtered
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string()]);
+fn test_values_requiring_csv_quoting() {
+    // Test performance with many values that need CSV quoting
+    let converter = ToseConverter::new();
 
-    let mut input_data = String::new();
+    let mut input_data = "  id  |  text                     \n------+---------------------------\n".to_string();
+    for i in 0..5000 {
+        input_data.push_str(&format!("   {}  | Text with, comma \"quote\" \n", i));
+    }
 
-    // Add 10,000 lines, half of which are empty
+    let mut output = Vec::new();
+    converter.convert(input_data.as_bytes(), &mut output).unwrap();
+
+    let result = String::from_utf8(output).unwrap();
+    assert!(result.starts_with("result[5000]{id,text}:"));
+    // Verify CSV escaping happened
+    assert!(result.contains("\"Text with, comma \"\"quote\"\"\""));
+}
+
+#[test]
+fn test_many_null_values() {
+    // Test with many NULL values
+    let converter = ToseConverter::new();
+
+    let mut input_data = "  a  |  b  |  c  \n-----+-----+-----\n".to_string();
     for i in 0..10_000 {
-        if i % 2 == 0 {
-            input_data.push_str(&format!("{}\n", i));
+        if i % 3 == 0 {
+            input_data.push_str(&format!("   {}  |     |     \n", i));
+        } else if i % 3 == 1 {
+            input_data.push_str(&format!("      |  {}  |     \n", i));
         } else {
-            input_data.push('\n');
+            input_data.push_str(&format!("      |     |  {}  \n", i));
         }
     }
 
@@ -117,63 +144,25 @@ fn test_many_empty_lines() {
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    // Should count only the 5000 non-empty rows
-    assert!(result.starts_with("test[5000]{id}:"));
-}
-
-#[test]
-fn test_quoted_fields_performance() {
-    // Test performance with many quoted fields
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "text".to_string()]);
-
-    let mut input_data = String::new();
-    for i in 0..5000 {
-        input_data.push_str(&format!("{},\"Text with, comma and \"\"quotes\"\" {}\"\n", i, i));
-    }
-
-    let mut output = Vec::new();
-    converter.convert(input_data.as_bytes(), &mut output).unwrap();
-
-    let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[5000]{id,text}:"));
-}
-
-#[test]
-fn test_multiline_fields_performance() {
-    // Test with fields containing newlines (these affect row counting)
-    // Note: The converter counts physical lines, not logical CSV records
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "text".to_string()]);
-
-    let mut input_data = String::new();
-    for i in 0..1000 {
-        input_data.push_str(&format!("{},\"Line1\nLine2\nLine3\"\n", i));
-    }
-
-    let mut output = Vec::new();
-    converter.convert(input_data.as_bytes(), &mut output).unwrap();
-
-    let result = String::from_utf8(output).unwrap();
-    // Each record has 2 embedded newlines, so 1000 records = 3000 physical lines
-    assert!(result.starts_with("test[3000]{id,text}:"));
+    assert!(result.starts_with("result[10000]{a,b,c}:"));
 }
 
 #[test]
 fn test_minimal_memory_footprint() {
     // Verify that we can process data larger than what we'd want in memory at once
-    // This test validates streaming behavior by using the tempfile approach
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string()]);
+    let converter = ToseConverter::new();
 
     // Generate 50,000 rows (approximately 500KB of data)
-    let mut input_data = String::new();
+    let mut input_data = "  id  \n------\n".to_string();
     for i in 0..50_000 {
-        input_data.push_str(&format!("{}\n", i));
+        input_data.push_str(&format!("   {}  \n", i));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[50000]{id}:"));
+    assert!(result.starts_with("result[50000]{id}:"));
 
     // Verify sample rows
     assert!(result.contains("0\n"));
@@ -184,33 +173,81 @@ fn test_minimal_memory_footprint() {
 #[test]
 fn test_unicode_heavy_dataset() {
     // Test performance with Unicode characters
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "text".to_string()]);
+    let converter = ToseConverter::new();
 
-    let mut input_data = String::new();
+    let mut input_data = "  id  |  text               \n------+---------------------\n".to_string();
     for i in 0..5000 {
-        input_data.push_str(&format!("{},\"Unicode: 你好世界 🚀 émojis\"\n", i));
+        input_data.push_str(&format!("   {}  | 你好世界 🚀 émojis  \n", i));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[5000]{id,text}:"));
+    assert!(result.starts_with("result[5000]{id,text}:"));
+    assert!(result.contains("你好世界 🚀 émojis"));
 }
 
 #[test]
-fn test_binary_like_data() {
-    // Test with data that looks like binary (hex strings, as per PostgreSQL bytea HEX format)
-    let converter = ToseConverter::new("test".to_string(), vec!["id".to_string(), "data".to_string()]);
+fn test_numeric_precision() {
+    // Test with high-precision numeric values
+    let converter = ToseConverter::new();
 
-    let mut input_data = String::new();
+    let mut input_data = "  id  |  price         \n------+----------------\n".to_string();
     for i in 0..1000 {
-        input_data.push_str(&format!("{},\\x{:02x}{:02x}{:02x}{:02x}\n", i, i % 256, (i * 2) % 256, (i * 3) % 256, (i * 4) % 256));
+        input_data.push_str(&format!("   {}  | {}.{:06}      \n", i, i, i * 123456 % 1000000));
     }
 
     let mut output = Vec::new();
     converter.convert(input_data.as_bytes(), &mut output).unwrap();
 
     let result = String::from_utf8(output).unwrap();
-    assert!(result.starts_with("test[1000]{id,data}:"));
+    assert!(result.starts_with("result[1000]{id,price}:"));
+}
+
+#[test]
+fn test_wide_and_deep_table() {
+    // Test a table that's both wide (many columns) and deep (many rows)
+    let converter = ToseConverter::new();
+
+    // 20 columns × 5000 rows
+    let num_cols = 20;
+    let num_rows = 5000;
+
+    let mut input = String::new();
+
+    // Build header
+    for i in 0..num_cols {
+        if i > 0 {
+            input.push_str(" | ");
+        }
+        input.push_str(&format!("c{}", i));
+    }
+    input.push('\n');
+
+    // Build separator
+    for i in 0..num_cols {
+        if i > 0 {
+            input.push('+');
+        }
+        input.push_str("----");
+    }
+    input.push('\n');
+
+    // Build data rows
+    for row in 0..num_rows {
+        for col in 0..num_cols {
+            if col > 0 {
+                input.push_str(" | ");
+            }
+            input.push_str(&format!(" {}", row * num_cols + col));
+        }
+        input.push('\n');
+    }
+
+    let mut output = Vec::new();
+    converter.convert(input.as_bytes(), &mut output).unwrap();
+
+    let result = String::from_utf8(output).unwrap();
+    assert!(result.starts_with("result[5000]{c0,c1,"));
 }

@@ -1,197 +1,183 @@
-# TOSE Converter
+# TOSE - Token-Optimized SQL Exchange
 
-A Rust CLI tool that adds a schema header to CSV data from PostgreSQL. TOSE (Token-Optimized SQL Exchange) is essentially **CSV with a descriptive header line** that tells an LLM what the data represents.
+**Experimental** pipe tools for passing SQL query results to terminal-based coding agents.
 
-## What It Does
+## What is this?
 
-Converts this:
-```csv
+This is an early-stage experiment in creating simple pipe tools for terminal workflows with coding agents (like Claude). The goal is to explore whether different output formats help with token usage or information clarity when piping database query results into LLM contexts.
+
+**⚠️ Very untested concept at this stage** - just playing around with ideas for how to structure data for LLM consumption via terminal pipes.
+
+TOSE attempts to combine CSV compactness with structural explicitness through a schema header.
+
+### Format Example
+
+**Input** (PostgreSQL default output):
+```
+  id  |  name   |  email
+------+---------+------------------
+   1  | Alice   | alice@example.com
+   2  | Bob     | bob@example.com
+(2 rows)
+```
+
+**Output** (TOSE format):
+```
+result[2]{id,name,email}:
 1,Alice,alice@example.com
 2,Bob,bob@example.com
 ```
 
-To this:
-```
-users[2]{id,name,email}:
-1,Alice,alice@example.com
-2,Bob,bob@example.com
-```
-
-The header costs **22 tokens** but provides schema information.
-
-## When To Use This
-
-✅ **Use TOSE when:**
-- Sending multiple tables and need clear boundaries
-- LLM needs to understand column names without separate explanation
-- Debugging/exploring data where schema clarity helps
-- 22 tokens is worth it for explainability
-
-❌ **Don't use TOSE when:**
-- Sending a single table (plain CSV is 22 tokens cheaper)
-- LLM already knows the schema
-- You're at absolute token limits
-- You can explain the schema elsewhere
-
-## Scientific Benchmarks
-
-Tested with PostgreSQL on 100 rows of real data using tiktoken (GPT-4 tokenizer):
-
-| Format | Tokens | vs JSON | vs CSV |
-|--------|--------|---------|---------|
-| **JSON** | 5,820 | baseline | +76% |
-| **Plain CSV** | 3,308 | **-43%** | baseline |
-| **TOSE** | 3,330 | **-43%** | +22 tokens |
-
-**Bottom line:** TOSE and CSV save ~43% vs JSON. TOSE costs 22 extra tokens for the header.
-
-### Multi-Table Scenario
-
-With 3 tables (users, orders, products):
-
-| Format | Tokens | Notes |
-|--------|--------|-------|
-| **Plain CSV** | 760 | Tables mashed together, no way to tell them apart |
-| **TOSE** | 818 | Clear table boundaries, +58 tokens |
-
-TOSE makes more sense here, but honestly you should probably JOIN the tables properly instead.
+The format consists of:
+- **Schema header**: `result[2]{id,name,email}:` - describes the data structure
+- **CSV data block**: Standard RFC 4180 CSV with proper escaping
 
 ## Installation
 
-### Homebrew (macOS)
+### Build from Source
 
 ```bash
-brew tap jeecabs/tose
-brew install tose_converter
-```
-
-### From Source
-
-Requires [Rust](https://rustup.rs/) 1.88.0 or later:
-
-```bash
-git clone https://github.com/Jeecabs/tose_converter.git
 cd tose_converter
-cargo install --path .
-```
-
-## Usage
-
-### Basic Syntax
-
-```bash
-tose_converter <ENTITY_NAME> [FIELD_1] [FIELD_2] ... [FIELD_N]
-```
-
-### Pipeline with PostgreSQL
-
-```bash
-psql -d my_db -c "\copy (SELECT sku, qty, price FROM order_items) TO STDOUT WITH (FORMAT CSV, HEADER FALSE)" \
-| tose_converter orderItems sku qty price
-```
-
-**Output:**
-```
-orderItems[2]{sku,qty,price}:
-A1,2,9.99
-B2,1,14.50
-```
-
-### Examples
-
-**Simple conversion:**
-```bash
-echo -e "A1,2,9.99\nB2,1,14.50" | tose_converter orderItems sku qty price
-```
-
-**With complex data (quotes, commas, NULL):**
-```bash
-psql -d my_db -c "\copy (SELECT id, title, body FROM notes) TO STDOUT WITH (FORMAT CSV, HEADER FALSE)" \
-| tose_converter notes id title body
-```
-
-## TOSE Format
-
-Two parts:
-
-1. **Schema Header**: `ENTITY[COUNT]{FIELD1,FIELD2,...}:`
-2. **Data Block**: Standard RFC 4180 CSV
-
-### Comparison
-
-**Plain CSV (no schema info):**
-```csv
-1,Alice,alice@example.com
-2,Bob,bob@example.com
-```
-*LLM doesn't know what columns are*
-
-**TOSE (22 tokens for schema):**
-```
-users[2]{id,name,email}:
-1,Alice,alice@example.com
-2,Bob,bob@example.com
-```
-*LLM knows: entity name, row count, column names*
-
-## Honest Assessment
-
-This tool works fine for what it does, but:
-
-1. **Plain CSV is more token-efficient** (saves 22 tokens)
-2. **You're probably better off** explaining the schema separately if tokens matter
-3. **Most useful for multi-table exports** where you need clear boundaries
-4. **Not revolutionary** - it's literally just CSV with a header
-
-Use it if the header clarity is worth 22 tokens to you. Don't use it if every token counts.
-
-## Specification
-
-See [TOSE_SPECIFICATION.md](TOSE_SPECIFICATION.md) for complete format details.
-
-## Development
-
-### Build
-
-```bash
 cargo build --release
 ```
 
-### Test
+The binary will be at `tose_converter/target/release/tose_converter`.
+
+## Usage
+
+### Zero-Friction Workflow
+
+The tool requires **no arguments** - just pipe psql output:
 
 ```bash
+# Basic query
+psql -c "SELECT * FROM users" | tose_converter
+
+# With database connection
+psql -d my_db -c "SELECT id, name, email FROM users LIMIT 10" | tose_converter
+
+# Filter results
+psql -c "SELECT * FROM users WHERE active = true" | tose_converter
+```
+
+### Output Example
+
+```bash
+$ psql -c "SELECT id, username, created_at FROM users LIMIT 3" | tose_converter
+result[3]{id,username,created_at}:
+1,alice,2025-01-01 10:00:00
+2,bob,2025-01-02 11:30:00
+3,charlie,2025-01-03 09:15:00
+```
+
+### Piping to LLMs
+
+```bash
+# To file for LLM input
+psql -c "SELECT * FROM orders WHERE status = 'pending'" | tose_converter > orders.tose
+
+# Direct to API (example with curl)
+psql -c "SELECT * FROM errors LIMIT 100" | \
+  tose_converter | \
+  jq -Rs '{model: "claude-3-5-sonnet", prompt: "Analyze these errors:\n\(.)"}' | \
+  curl -X POST https://api.anthropic.com/v1/messages ...
+```
+
+## Features
+
+### ✨ Zero-Friction UX
+- **No CLI arguments needed** - column names auto-extracted from psql output
+- **No format conversion** - works with psql's default table format
+- **Just pipe** - `psql -c "..." | tose_converter`
+
+### 🚀 Optimized for LLMs
+- **Compact** - CSV-like data block minimizes tokens
+- **Self-documenting** - header includes column names and row count
+- **Structured** - easier for LLMs to parse than plain CSV
+
+### 💪 Robust
+- **NULL handling** - empty cells properly handled
+- **CSV escaping** - commas, quotes, newlines properly escaped
+- **Error messages** - clear feedback for invalid input
+- **High performance** - streaming I/O, handles gigabytes of data
+
+## Edge Cases Handled
+
+### Empty Results
+```bash
+$ psql -c "SELECT * FROM users WHERE false" | tose_converter
+result[0]{id,name,email}:
+```
+
+### NULL Values
+```
+Input:   1  | Alice   |
+Output:  1,Alice,
+```
+
+### Special Characters
+```
+Input:   1  | Hello, World    | Say "Hi"
+Output:  1,"Hello, World","Say ""Hi"""
+```
+
+## Potential Token Savings (Untested)
+
+The hypothesis is that TOSE might save tokens compared to JSON for tabular data, but **this hasn't been rigorously tested yet**.
+
+**JSON** (verbose):
+```json
+[
+  {"id": 1, "name": "Alice", "email": "alice@example.com"},
+  {"id": 2, "name": "Bob", "email": "bob@example.com"}
+]
+```
+
+**TOSE** (compact):
+```
+result[2]{id,name,email}:
+1,Alice,alice@example.com
+2,Bob,bob@example.com
+```
+
+Whether this actually helps with LLM understanding or token efficiency is still TBD.
+
+## Technical Details
+
+- **Language**: Rust (edition 2024)
+- **Input**: PostgreSQL ASCII table format (default psql output)
+- **Output**: TOSE format (schema header + RFC 4180 CSV)
+- **Dependencies**: None (core), tempfile (tests)
+- **Performance**: Streaming I/O, buffered writes
+
+## Development
+
+```bash
+# Run tests
+cd tose_converter
 cargo test
-```
 
-82 comprehensive tests covering:
-- TOSE specification examples
-- RFC 4180 CSV compliance
-- Row counting edge cases
-- Performance with large datasets (100K+ rows)
-- Unicode and binary data handling
+# Format code
+cargo fmt
 
-### Lint
-
-```bash
+# Lint
 cargo clippy
+
+# Build release
+cargo build --release
 ```
 
-## Architecture
+## Design Principles
 
-- **Streaming**: Temporary file buffering for constant memory usage
-- **Zero-copy**: Preserves CSV data byte-for-byte (no parsing/re-encoding)
-- **Performance**: Handles gigabytes of data with buffered I/O
+1. **Zero friction** - no configuration, no arguments, just works
+2. **Token efficiency** - minimize LLM token consumption
+3. **Robustness** - handle all edge cases gracefully
+4. **Performance** - stream large datasets efficiently
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+[Add your license here]
 
 ## Contributing
 
-Contributions welcome! This is an educational project exploring token optimization strategies.
-
-## Links
-
-- [GitHub Repository](https://github.com/Jeecabs/tose_converter)
-- [Homebrew Tap](https://github.com/Jeecabs/homebrew-tose)
-- [Issue Tracker](https://github.com/Jeecabs/tose_converter/issues)
+[Add contribution guidelines here]
